@@ -1,0 +1,14 @@
+[project]
+name = "klaus-kode"
+version = "0.1.0"
+description = "Donate your Claude credits to open source by autonomously working on GitHub issues"
+requires-python = ">=3.10"
+dependencies = []
+# Runtime deps (git, gh, claude) are provided by Docker
+
+[project.scripts]
+klaus-kode = "klaus_kode.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
