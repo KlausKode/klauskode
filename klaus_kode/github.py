@@ -179,6 +179,38 @@ def check_issue_active_work(repo: str, issue: Issue) -> tuple[bool, str]:
     return False, ""
 
 
+def search_issues(repo: str, limit: int = 30) -> list[Issue]:
+    """Fetch a batch of open issues from the repo.
+
+    Filters out pull requests (GitHub API returns PRs mixed in).
+    Returns a list of Issue objects sorted by most recently updated.
+    """
+    result = _run_gh(
+        "api",
+        f"repos/{repo}/issues?state=open&per_page={limit}&sort=updated",
+        check=False,
+    )
+    if result.returncode != 0:
+        print(f"Error: Could not fetch issues from {repo}.", file=sys.stderr)
+        print(result.stderr.strip(), file=sys.stderr)
+        return []
+
+    items = json.loads(result.stdout)
+    issues: list[Issue] = []
+    for item in items:
+        # GitHub API returns PRs mixed in with issues — filter them out
+        if "pull_request" in item:
+            continue
+        issues.append(Issue(
+            number=item["number"],
+            title=item["title"],
+            body=item.get("body") or "",
+            labels=[label["name"] for label in item.get("labels", [])],
+            state=item["state"],
+        ))
+    return issues
+
+
 def fork_repo(repo: str) -> str:
     """Fork the repo to the authenticated user's account. Returns fork 'owner/name'."""
     # --clone=false: don't clone locally, we clone separately

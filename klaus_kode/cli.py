@@ -14,6 +14,7 @@ from klaus_kode.claude_runner import (
     commit_changes,
     create_branch,
     generate_pr_description,
+    pick_issue,
     push_branch,
     read_contributing_guidelines,
     run_claude_review,
@@ -29,6 +30,7 @@ from klaus_kode.github import (
     check_token_scopes,
     fetch_issue,
     fork_repo,
+    search_issues,
     validate_repo,
 )
 
@@ -80,11 +82,16 @@ def main(argv: list[str] | None = None) -> None:
         required=True,
         help="GitHub repository in owner/repo format",
     )
-    parser.add_argument(
+    issue_group = parser.add_mutually_exclusive_group(required=True)
+    issue_group.add_argument(
         "--issue",
-        required=True,
         type=int,
         help="Issue number to work on",
+    )
+    issue_group.add_argument(
+        "--find",
+        type=str,
+        help="Search open issues and pick one matching this description (e.g. 'easy', 'documentation fix')",
     )
     parser.add_argument(
         "-v", "--verbose",
@@ -111,28 +118,55 @@ def main(argv: list[str] | None = None) -> None:
         print(f"Error: Repository '{args.repo}' not found.", file=sys.stderr)
         raise SystemExit(1)
 
-    # 3. Fetch issue (includes state)
-    print(f"Fetching issue #{args.issue}...")
-    issue = fetch_issue(args.repo, args.issue)
-    if issue is None:
-        raise SystemExit(1)
-    if issue.state != "open":
-        print(
-            f"Error: Issue #{args.issue} is not open (state: {issue.state}).",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-    print(f"  Issue #{issue.number}: {issue.title}")
-    if args.verbose and issue.labels:
-        print(f"  Labels: {', '.join(issue.labels)}")
+    # 3. Fetch or find issue
+    if args.find:
+        print(f"Searching open issues in {args.repo} matching: '{args.find}'...")
+        candidates = search_issues(args.repo)
+        if not candidates:
+            print("Error: No open issues found.", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"  Found {len(candidates)} open issues, filtering...")
 
-    # 3.5 Check if issue is already being worked on
-    print(f"Checking if issue #{args.issue} is already being worked on...")
-    is_active, reason = check_issue_active_work(args.repo, issue)
-    if is_active:
-        print(f"Skipping issue #{args.issue}: {reason}", file=sys.stderr)
-        raise SystemExit(1)
-    print("  No active work found, proceeding.")
+        # Filter out issues that are already being worked on
+        available: list[github.Issue] = []
+        for candidate in candidates:
+            is_active, reason = check_issue_active_work(args.repo, candidate)
+            if not is_active:
+                available.append(candidate)
+            elif args.verbose:
+                print(f"  Skipping #{candidate.number}: {reason}")
+
+        if not available:
+            print("Error: All candidate issues are already being worked on.", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"  {len(available)} issues available (not claimed)")
+
+        issue = pick_issue(available, args.find)
+        print(f"  Selected issue #{issue.number}: {issue.title}")
+        if issue.labels:
+            print(f"  Labels: {', '.join(issue.labels)}")
+    else:
+        print(f"Fetching issue #{args.issue}...")
+        issue = fetch_issue(args.repo, args.issue)
+        if issue is None:
+            raise SystemExit(1)
+        if issue.state != "open":
+            print(
+                f"Error: Issue #{args.issue} is not open (state: {issue.state}).",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        print(f"  Issue #{issue.number}: {issue.title}")
+        if args.verbose and issue.labels:
+            print(f"  Labels: {', '.join(issue.labels)}")
+
+        # Check if issue is already being worked on
+        print(f"Checking if issue #{args.issue} is already being worked on...")
+        is_active, reason = check_issue_active_work(args.repo, issue)
+        if is_active:
+            print(f"Skipping issue #{args.issue}: {reason}", file=sys.stderr)
+            raise SystemExit(1)
+        print("  No active work found, proceeding.")
 
     # 4. Fork repo
     print(f"\nForking {args.repo}...")

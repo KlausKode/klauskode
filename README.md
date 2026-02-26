@@ -5,6 +5,8 @@ Donate your excess Claude Code credits to open source — Klaus Kode picks up a 
 As easy as:
 ```bash
 ./run.sh --repo owner/repo --issue 42
+# or let Klaus pick an issue for you:
+./run.sh --repo owner/repo --find "easy"
 ```
 
 ## How it works
@@ -14,7 +16,7 @@ Everything runs inside Docker — nothing is installed on your machine. The fork
 ## Pipeline overview
 
 ```
- 1.  Validate — check auth, repo, and issue
+ 1.  Validate — check auth, repo, and issue (or find one via --find)
  2.  Fork & clone — fork the repo and clone it in Docker
  3.  Setup — read contributing guidelines, create feature branch
  4.  Implement — Claude works on the issue
@@ -38,20 +40,30 @@ cp .env.example .env
 # Fill in your tokens in .env
 set -a && source .env && set +a
 
+# Work on a specific issue:
 ./run.sh --repo owner/repo --issue 42
+
+# Or let Klaus find a suitable issue:
+./run.sh --repo owner/repo --find "easy"
 ```
 
 ## Usage
 
 ```
 ./run.sh --repo owner/repo --issue <number> [options]
+./run.sh --repo owner/repo --find "<description>" [options]
 ```
+
+`--issue` and `--find` are mutually exclusive; exactly one is required.
 
 | Option | Description |
 |---|---|
 | `--repo owner/repo` | Target GitHub repository |
 | `--issue N` | Issue number to work on |
+| `--find "<description>"` | Search open issues and pick one matching the description |
 | `-v` / `-vv` | Increase output verbosity |
+
+The `--find` flag accepts any free-text description — a difficulty level (`"easy"`, `"medium"`, `"hard"`), a topic (`"simple documentation fix"`), or a specific technical detail (`"epsilon comparison in RANSAC"`). Klaus fetches recent open issues, filters out ones already being worked on, and uses Claude to pick the best match.
 
 Output is printed to the terminal and saved to `logs/run_<timestamp>.log`.
 

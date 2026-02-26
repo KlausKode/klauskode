@@ -24,6 +24,51 @@ REPO_PATH = "/workspace/repo"
 _global_start: float | None = None
 
 
+def pick_issue(issues: list[Issue], description: str) -> Issue:
+    """Use Claude haiku to select the best issue matching a user description.
+
+    Falls back to the first issue if parsing fails.
+    """
+    # Build a numbered list of issues for Claude to choose from
+    lines: list[str] = []
+    for i, issue in enumerate(issues):
+        labels = f" [{', '.join(issue.labels)}]" if issue.labels else ""
+        body_preview = issue.body[:200].replace("\n", " ").strip()
+        if body_preview:
+            body_preview = f" — {body_preview}"
+        lines.append(f"{issue.number}. {issue.title}{labels}{body_preview}")
+
+    issue_list = "\n".join(lines)
+    prompt = (
+        f"Given these open GitHub issues:\n\n{issue_list}\n\n"
+        f"Pick the ONE issue that best matches this user request: '{description}'.\n"
+        f"The request might be a difficulty level (easy/medium/hard), a topic description, "
+        f"or a specific technical detail.\n"
+        f"Consider: how well it matches the request, whether it's self-contained, "
+        f"and whether it has a clear fix.\n"
+        f"Reply with ONLY the issue number, nothing else."
+    )
+
+    result = subprocess.run(
+        ["claude", "-p", "--dangerously-skip-permissions", "--model", "haiku"],
+        input=prompt,
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode == 0 and result.stdout.strip():
+        # Extract the issue number from Claude's response
+        match = re.search(r'\d+', result.stdout.strip())
+        if match:
+            chosen_number = int(match.group())
+            for issue in issues:
+                if issue.number == chosen_number:
+                    return issue
+
+    # Fallback to first issue
+    return issues[0]
+
+
 def clone_repo(repo: str, fork_repo: str) -> str:
     """Configure git, clone the fork, set up upstream, detect default branch.
 

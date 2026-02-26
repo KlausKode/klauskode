@@ -6,7 +6,10 @@ LOG_DIR="logs"
 
 # --- Usage ---
 # ./run.sh --repo owner/repo --issue 42 [-v]
+# ./run.sh --repo owner/repo --find "easy" [-v]
+# ./run.sh --repo owner/repo --find "simple documentation fix" [-v]
 #
+# --issue and --find are mutually exclusive; one is required.
 # Output is shown in the terminal AND saved to logs/run_<timestamp>.log
 #
 # Required env vars:
