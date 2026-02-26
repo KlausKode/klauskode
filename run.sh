@@ -5,11 +5,24 @@ IMAGE="klaus-kode"
 LOG_DIR="logs"
 
 # --- Usage ---
-# ./run.sh --repo owner/repo --issue 42 [-v]
-# ./run.sh --repo owner/repo --find "easy" [-v]
-# ./run.sh --repo owner/repo --find "simple documentation fix" [-v]
+# Mode 1: explicit repo + explicit issue
+#   ./run.sh --repo owner/repo --issue 42 [-v]
 #
-# --issue and --find are mutually exclusive; one is required.
+# Mode 2: explicit repo + Claude picks issue
+#   ./run.sh --repo owner/repo --find "medium difficulty bug fix" [-v]
+#
+# Mode 3: explicit repo + Klaus defaults to easy issue
+#   ./run.sh --repo owner/repo [-v]
+#
+# Mode 4: Klaus finds repo AND picks issue
+#   ./run.sh --find-repo "python web framework" [-v]
+#   ./run.sh --find-repo "python web framework" --find "documentation fix" [-v]
+#
+# --repo and --find-repo are mutually exclusive; one is required.
+# --issue and --find are mutually exclusive and optional.
+# --find-repo + --issue is an error.
+# When neither --issue nor --find is given, defaults to easy beginner-friendly issues.
+#
 # Output is shown in the terminal AND saved to logs/run_<timestamp>.log
 #
 # Required env vars:

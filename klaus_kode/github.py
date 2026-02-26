@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from urllib.parse import quote
 
 # Module-level verbosity level — set by CLI at startup (0=quiet, 1=verbose, 2+=debug).
 verbose = 0
@@ -23,6 +24,16 @@ class Issue:
     body: str
     labels: list[str]
     state: str = "open"
+
+
+@dataclass
+class Repository:
+    full_name: str        # "owner/repo"
+    description: str
+    language: str
+    stars: int
+    open_issues_count: int
+    topics: list[str]
 
 
 def _run_gh(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -209,6 +220,37 @@ def search_issues(repo: str, limit: int = 30) -> list[Issue]:
             state=item["state"],
         ))
     return issues
+
+
+def search_repos(description: str, limit: int = 10) -> list[Repository]:
+    """Search GitHub for repositories matching a description.
+
+    Filters for repos with good-first-issues and >10 stars.
+    Returns a list of Repository objects sorted by stars.
+    """
+    query = quote(f"{description} good-first-issues:>0 stars:>10")
+    result = _run_gh(
+        "api",
+        f"search/repositories?q={query}&sort=stars&order=desc&per_page={limit}",
+        check=False,
+    )
+    if result.returncode != 0:
+        print("Error: Could not search repositories.", file=sys.stderr)
+        print(result.stderr.strip(), file=sys.stderr)
+        return []
+
+    data = json.loads(result.stdout)
+    repos: list[Repository] = []
+    for item in data.get("items", []):
+        repos.append(Repository(
+            full_name=item.get("full_name", ""),
+            description=item.get("description") or "",
+            language=item.get("language") or "",
+            stars=item.get("stargazers_count", 0),
+            open_issues_count=item.get("open_issues_count", 0),
+            topics=item.get("topics") or [],
+        ))
+    return repos
 
 
 def fork_repo(repo: str) -> str:

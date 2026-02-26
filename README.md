@@ -7,6 +7,10 @@ As easy as:
 ./run.sh --repo owner/repo --issue 42
 # or let Klaus pick an issue for you:
 ./run.sh --repo owner/repo --find "easy"
+# or just point at a repo and let Klaus find an easy issue:
+./run.sh --repo owner/repo
+# or let Klaus find both the repo and the issue:
+./run.sh --find-repo "python web framework"
 ```
 
 ## How it works
@@ -43,8 +47,14 @@ set -a && source .env && set +a
 # Work on a specific issue:
 ./run.sh --repo owner/repo --issue 42
 
-# Or let Klaus find a suitable issue:
+# Let Klaus find a suitable issue:
 ./run.sh --repo owner/repo --find "easy"
+
+# Let Klaus pick an easy issue automatically:
+./run.sh --repo owner/repo
+
+# Let Klaus find a repo AND pick an issue:
+./run.sh --find-repo "python web framework"
 ```
 
 ## Usage
@@ -52,18 +62,23 @@ set -a && source .env && set +a
 ```
 ./run.sh --repo owner/repo --issue <number> [options]
 ./run.sh --repo owner/repo --find "<description>" [options]
+./run.sh --repo owner/repo [options]
+./run.sh --find-repo "<description>" [--find "<description>"] [options]
 ```
 
-`--issue` and `--find` are mutually exclusive; exactly one is required.
+`--repo` and `--find-repo` are mutually exclusive; one is required. `--issue` and `--find` are mutually exclusive and optional. When neither `--issue` nor `--find` is given, Klaus defaults to finding an easy beginner-friendly issue.
 
 | Option | Description |
 |---|---|
 | `--repo owner/repo` | Target GitHub repository |
+| `--find-repo "<description>"` | Search GitHub for a matching repo (mutually exclusive with `--repo`) |
 | `--issue N` | Issue number to work on |
 | `--find "<description>"` | Search open issues and pick one matching the description |
 | `-v` / `-vv` | Increase output verbosity |
 
 The `--find` flag accepts any free-text description — a difficulty level (`"easy"`, `"medium"`, `"hard"`), a topic (`"simple documentation fix"`), or a specific technical detail (`"epsilon comparison in RANSAC"`). Klaus fetches recent open issues, filters out ones already being worked on, and uses Claude to pick the best match.
+
+The `--find-repo` flag searches GitHub for repositories matching the description, filtering for repos with good-first-issues and >10 stars. Claude picks the best match. Cannot be combined with `--issue` (since issue numbers are repo-specific).
 
 Output is printed to the terminal and saved to `logs/run_<timestamp>.log`.
 

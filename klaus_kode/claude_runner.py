@@ -15,7 +15,7 @@ from urllib.parse import quote
 import sys
 import time
 
-from klaus_kode.github import Issue
+from klaus_kode.github import Issue, Repository
 
 # All repo operations run in this directory
 REPO_PATH = "/workspace/repo"
@@ -67,6 +67,46 @@ def pick_issue(issues: list[Issue], description: str) -> Issue:
 
     # Fallback to first issue
     return issues[0]
+
+
+def pick_repo(repos: list[Repository], description: str) -> Repository:
+    """Use Claude haiku to select the best repository matching a user description.
+
+    Falls back to the first repo if parsing fails.
+    """
+    lines: list[str] = []
+    for i, repo in enumerate(repos, 1):
+        topics = f" [{', '.join(repo.topics)}]" if repo.topics else ""
+        lines.append(
+            f"{i}. {repo.full_name} ({repo.language}, {repo.stars}\u2605, "
+            f"{repo.open_issues_count} open issues){topics} \u2014 {repo.description}"
+        )
+
+    repo_list = "\n".join(lines)
+    prompt = (
+        f"Given these GitHub repositories:\n\n{repo_list}\n\n"
+        f"Pick the ONE repository that best matches this user request: '{description}'.\n"
+        f"Consider: relevance to the request, number of open issues, "
+        f"whether it's beginner-friendly, and project activity.\n"
+        f"Reply with ONLY the number (1-{len(repos)}), nothing else."
+    )
+
+    result = subprocess.run(
+        ["claude", "-p", "--dangerously-skip-permissions", "--model", "haiku"],
+        input=prompt,
+        capture_output=True,
+        text=True,
+    )
+
+    if result.returncode == 0 and result.stdout.strip():
+        match = re.search(r'\d+', result.stdout.strip())
+        if match:
+            idx = int(match.group()) - 1  # 1-indexed to 0-indexed
+            if 0 <= idx < len(repos):
+                return repos[idx]
+
+    # Fallback to first repo
+    return repos[0]
 
 
 def clone_repo(repo: str, fork_repo: str) -> str:

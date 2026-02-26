@@ -15,6 +15,7 @@ from klaus_kode.claude_runner import (
     create_branch,
     generate_pr_description,
     pick_issue,
+    pick_repo,
     push_branch,
     read_contributing_guidelines,
     run_claude_review,
@@ -31,6 +32,7 @@ from klaus_kode.github import (
     fetch_issue,
     fork_repo,
     search_issues,
+    search_repos,
     validate_repo,
 )
 
@@ -79,10 +81,16 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--repo",
-        required=True,
+        default=None,
         help="GitHub repository in owner/repo format",
     )
-    issue_group = parser.add_mutually_exclusive_group(required=True)
+    parser.add_argument(
+        "--find-repo",
+        type=str,
+        default=None,
+        help="Search GitHub for a repository matching this description (e.g. 'python web framework')",
+    )
+    issue_group = parser.add_mutually_exclusive_group(required=False)
     issue_group.add_argument(
         "--issue",
         type=int,
@@ -102,6 +110,15 @@ def main(argv: list[str] | None = None) -> None:
 
     args = parser.parse_args(argv)
 
+    # Custom validation: --repo and --find-repo are mutually exclusive; one is required
+    if args.repo and args.find_repo:
+        parser.error("--repo and --find-repo are mutually exclusive")
+    if not args.repo and not args.find_repo:
+        parser.error("one of --repo or --find-repo is required")
+    # --find-repo + --issue is an error (can't know issue numbers for an unknown repo)
+    if args.find_repo and args.issue is not None:
+        parser.error("--issue cannot be used with --find-repo (issue numbers are repo-specific)")
+
     t0 = time.time()
     claude_runner._global_start = t0
 
@@ -112,40 +129,29 @@ def main(argv: list[str] | None = None) -> None:
     print("Checking prerequisites...")
     _check_prerequisites(verbose=args.verbose)
 
-    # 2. Validate repo
+    # 2. Find repo if --find-repo was used
+    if args.find_repo:
+        print(f"\nSearching GitHub for repos matching: '{args.find_repo}'...")
+        candidates_repos = search_repos(args.find_repo)
+        if not candidates_repos:
+            print("Error: No repositories found.", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"  Found {len(candidates_repos)} candidate repos:")
+        for i, r in enumerate(candidates_repos, 1):
+            print(f"    {i}. {r.full_name} ({r.language}, {r.stars}\u2605) \u2014 {r.description[:80]}")
+        chosen = pick_repo(candidates_repos, args.find_repo)
+        args.repo = chosen.full_name
+        print(f"  Selected repo: {args.repo}")
+
+    # 3. Validate repo
     print(f"\nValidating repo {args.repo}...")
     if not validate_repo(args.repo):
         print(f"Error: Repository '{args.repo}' not found.", file=sys.stderr)
         raise SystemExit(1)
 
-    # 3. Fetch or find issue
-    if args.find:
-        print(f"Searching open issues in {args.repo} matching: '{args.find}'...")
-        candidates = search_issues(args.repo)
-        if not candidates:
-            print("Error: No open issues found.", file=sys.stderr)
-            raise SystemExit(1)
-        print(f"  Found {len(candidates)} open issues, filtering...")
-
-        # Filter out issues that are already being worked on
-        available: list[github.Issue] = []
-        for candidate in candidates:
-            is_active, reason = check_issue_active_work(args.repo, candidate)
-            if not is_active:
-                available.append(candidate)
-            elif args.verbose:
-                print(f"  Skipping #{candidate.number}: {reason}")
-
-        if not available:
-            print("Error: All candidate issues are already being worked on.", file=sys.stderr)
-            raise SystemExit(1)
-        print(f"  {len(available)} issues available (not claimed)")
-
-        issue = pick_issue(available, args.find)
-        print(f"  Selected issue #{issue.number}: {issue.title}")
-        if issue.labels:
-            print(f"  Labels: {', '.join(issue.labels)}")
-    else:
+    # 4. Fetch or find issue
+    if args.issue is not None:
+        # Explicit issue number
         print(f"Fetching issue #{args.issue}...")
         issue = fetch_issue(args.repo, args.issue)
         if issue is None:
@@ -167,6 +173,50 @@ def main(argv: list[str] | None = None) -> None:
             print(f"Skipping issue #{args.issue}: {reason}", file=sys.stderr)
             raise SystemExit(1)
         print("  No active work found, proceeding.")
+    else:
+        # Use --find description or default to easy beginner-friendly issues
+        find_description = args.find or "easy beginner-friendly good first issue"
+        print(f"Searching open issues in {args.repo} matching: '{find_description}'...")
+        candidates = search_issues(args.repo)
+        if not candidates:
+            print("Error: No open issues found.", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"  Found {len(candidates)} open issues, filtering...")
+
+        # Labels that indicate non-coding issues
+        non_coding_labels = {
+            "question", "discussion", "support",
+            "wontfix", "won't fix", "duplicate", "invalid",
+            "needs info", "needs-info", "needs more info",
+            "waiting for response", "waiting-for-response",
+        }
+
+        # Filter out non-coding issues and issues already being worked on
+        available: list[github.Issue] = []
+        for candidate in candidates:
+            # Skip issues with non-coding labels
+            candidate_labels = {label.lower() for label in candidate.labels}
+            skipped_labels = candidate_labels & non_coding_labels
+            if skipped_labels:
+                if args.verbose:
+                    print(f"  Skipping #{candidate.number}: non-coding label(s): {', '.join(skipped_labels)}")
+                continue
+
+            is_active, reason = check_issue_active_work(args.repo, candidate)
+            if not is_active:
+                available.append(candidate)
+            elif args.verbose:
+                print(f"  Skipping #{candidate.number}: {reason}")
+
+        if not available:
+            print("Error: All candidate issues are already being worked on.", file=sys.stderr)
+            raise SystemExit(1)
+        print(f"  {len(available)} issues available (not claimed)")
+
+        issue = pick_issue(available, find_description)
+        print(f"  Selected issue #{issue.number}: {issue.title}")
+        if issue.labels:
+            print(f"  Labels: {', '.join(issue.labels)}")
 
     # 4. Fork repo
     print(f"\nForking {args.repo}...")
