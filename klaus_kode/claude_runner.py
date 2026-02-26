@@ -5,7 +5,6 @@ All functions use subprocess directly — no bash script generation.
 
 from __future__ import annotations
 
-import datetime
 import json
 import os
 import random
@@ -15,6 +14,10 @@ import subprocess
 from urllib.parse import quote
 import sys
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from klaus_kode.run_logger import RunLogger
 
 from klaus_kode.github import Issue, Repository
 
@@ -25,7 +28,7 @@ REPO_PATH = "/workspace/repo"
 _global_start: float | None = None
 
 
-def pick_issue(issues: list[Issue], description: str) -> Issue:
+def pick_issue(issues: list[Issue], description: str, logger: RunLogger | None = None) -> Issue:
     """Use Claude haiku to select the best issue matching a user description.
 
     Falls back to the first issue if parsing fails.
@@ -50,12 +53,11 @@ def pick_issue(issues: list[Issue], description: str) -> Issue:
         f"Reply with ONLY the issue number, nothing else."
     )
 
-    result = subprocess.run(
-        ["claude", "-p", "--dangerously-skip-permissions", "--model", "haiku"],
-        input=prompt,
-        capture_output=True,
-        text=True,
-    )
+    cmd = ["claude", "-p", "--dangerously-skip-permissions", "--model", "haiku"]
+    result = subprocess.run(cmd, input=prompt, capture_output=True, text=True)
+
+    if logger:
+        logger.log_subprocess(cmd, result.returncode, result.stdout, result.stderr)
 
     if result.returncode == 0 and result.stdout.strip():
         # Extract the issue number from Claude's response
@@ -70,7 +72,7 @@ def pick_issue(issues: list[Issue], description: str) -> Issue:
     return issues[0]
 
 
-def pick_repo(repos: list[Repository], description: str) -> Repository:
+def pick_repo(repos: list[Repository], description: str, logger: RunLogger | None = None) -> Repository:
     """Use Claude haiku to select the best repository matching a user description.
 
     Falls back to the first repo if parsing fails.
@@ -92,12 +94,11 @@ def pick_repo(repos: list[Repository], description: str) -> Repository:
         f"Reply with ONLY the number (1-{len(repos)}), nothing else."
     )
 
-    result = subprocess.run(
-        ["claude", "-p", "--dangerously-skip-permissions", "--model", "haiku"],
-        input=prompt,
-        capture_output=True,
-        text=True,
-    )
+    cmd = ["claude", "-p", "--dangerously-skip-permissions", "--model", "haiku"]
+    result = subprocess.run(cmd, input=prompt, capture_output=True, text=True)
+
+    if logger:
+        logger.log_subprocess(cmd, result.returncode, result.stdout, result.stderr)
 
     if result.returncode == 0 and result.stdout.strip():
         match = re.search(r'\d+', result.stdout.strip())
@@ -110,50 +111,60 @@ def pick_repo(repos: list[Repository], description: str) -> Repository:
     return repos[0]
 
 
-def clone_repo(repo: str, fork_repo: str) -> str:
+def clone_repo(repo: str, fork_repo: str, logger: RunLogger | None = None) -> str:
     """Configure git, clone the fork, set up upstream, detect default branch.
 
     Returns the default branch name (e.g. 'main' or 'master').
     """
+    def _run(cmd, **kwargs):
+        """Run a subprocess and optionally log it."""
+        r = subprocess.run(cmd, **kwargs)
+        if logger:
+            stdout = ""
+            stderr = ""
+            if kwargs.get("capture_output"):
+                stdout = r.stdout if isinstance(r.stdout, str) else (r.stdout or b"").decode("utf-8", errors="replace")
+                stderr = r.stderr if isinstance(r.stderr, str) else (r.stderr or b"").decode("utf-8", errors="replace")
+            logger.log_subprocess(cmd, r.returncode, stdout, stderr)
+        return r
+
     print("[1/9] Configuring git...")
-    subprocess.run(["git", "config", "--global", "user.name", "klaus-kode"], check=True)
-    subprocess.run(
+    _run(["git", "config", "--global", "user.name", "klaus-kode"], check=True)
+    _run(
         ["git", "config", "--global", "user.email", "klaus-kode@users.noreply.github.com"],
         check=True,
     )
-    subprocess.run(["git", "config", "--global", "core.pager", "cat"], check=True)
+    _run(["git", "config", "--global", "core.pager", "cat"], check=True)
 
     print("[2/9] Setting up GitHub authentication...")
-    # Use gh credential helper — token never embedded in URLs or config keys
-    # Capture output to suppress terminal escape sequence artifacts
-    subprocess.run(["gh", "auth", "setup-git"], check=True, capture_output=True)
+    _run(["gh", "auth", "setup-git"], check=True, capture_output=True)
 
     print(f"[3/9] Cloning fork {fork_repo} (shallow)...")
-    subprocess.run(
+    _run(
         ["git", "clone", "--depth=1", "--single-branch",
          f"https://github.com/{fork_repo}.git", REPO_PATH],
         check=True,
     )
 
     # Set up upstream remote
-    result = subprocess.run(
+    result = _run(
         ["git", "remote", "set-url", "upstream", f"https://github.com/{repo}.git"],
         capture_output=True,
         cwd=REPO_PATH,
     )
     if result.returncode != 0:
-        subprocess.run(
+        _run(
             ["git", "remote", "add", "upstream", f"https://github.com/{repo}.git"],
             check=True,
             cwd=REPO_PATH,
         )
-    subprocess.run(
+    _run(
         ["git", "fetch", "upstream", "main", "--depth=1"],
         capture_output=True,
         cwd=REPO_PATH,
     )
     # Also try fetching master in case that's the default
-    subprocess.run(
+    _run(
         ["git", "fetch", "upstream", "master", "--depth=1"],
         capture_output=True,
         cwd=REPO_PATH,
@@ -161,13 +172,13 @@ def clone_repo(repo: str, fork_repo: str) -> str:
 
     # Detect default branch
     default_branch = "main"
-    check_main = subprocess.run(
+    check_main = _run(
         ["git", "rev-parse", "--verify", "upstream/main"],
         capture_output=True,
         cwd=REPO_PATH,
     )
     if check_main.returncode != 0:
-        check_master = subprocess.run(
+        check_master = _run(
             ["git", "rev-parse", "--verify", "upstream/master"],
             capture_output=True,
             cwd=REPO_PATH,
@@ -176,7 +187,7 @@ def clone_repo(repo: str, fork_repo: str) -> str:
             default_branch = "master"
         else:
             # Fallback: first remote branch from upstream
-            result = subprocess.run(
+            result = _run(
                 ["git", "branch", "-r"], capture_output=True, text=True, cwd=REPO_PATH,
             )
             for line in result.stdout.splitlines():
@@ -461,6 +472,7 @@ def _iter_stdout_lines(process: subprocess.Popen):
 
 def _run_claude_streaming(
     prompt: str, header: str, activity: str, verbose: int = 0, max_turns: int = 50,
+    logger: RunLogger | None = None, step_name: str = "",
 ) -> str:
     """Run Claude in pipe mode with stream-json output and render a live TUI.
 
@@ -470,6 +482,9 @@ def _run_claude_streaming(
 
     Returns the final text output from Claude.
     """
+    if logger:
+        logger.log_step_start(step_name or activity, prompt=prompt, max_turns=max_turns)
+
     print()
     print("============================================")
     print(header)
@@ -506,21 +521,13 @@ def _run_claude_streaming(
     seen_tool_ids = {}  # tool_id -> tool_name, track which we already printed a header for
     final_output = ""  # capture final text for return value
 
-    # Structured run log for post-run analysis
-    run_log = {
-        "prompt": prompt,
-        "activity": activity,
-        "start_time": datetime.datetime.now().isoformat(),
-        "end_time": None,
-        "duration_s": 0,
-        "num_turns": None,
-        "token_usage": {},
-        "tool_calls": [],
-        "errors": [],
-        "text_blocks": [],
-        "final_output": "",
-        "exit_code": None,
-    }
+    # Lightweight tracking for the terminal summary (replaces old run_log)
+    num_tool_calls = 0
+    num_errors = 0
+    error_summaries: list[dict] = []
+    result_turns = None
+    result_usage: dict = {}
+    tool_start_times: dict[str, float] = {}  # tool_id -> start time
 
     def _elapsed() -> str:
         return f"{int(time.time() - start_time)}s"
@@ -550,6 +557,17 @@ def _run_claude_streaming(
     def _print_line(msg: str):
         _clear_spinner()
         print(msg, flush=True)
+
+    def _extract_tool_output(block: dict) -> str:
+        """Extract full text content from a tool_result block."""
+        output = block.get("output", "") or block.get("content", "")
+        if isinstance(output, list):
+            parts = []
+            for b in output:
+                if isinstance(b, dict) and b.get("text"):
+                    parts.append(b["text"])
+            return "\n".join(parts)
+        return str(output) if output else ""
 
     try:
         for line in _iter_stdout_lines(process):
@@ -608,19 +626,12 @@ def _run_claude_streaming(
                         tool_id = block.get("id", "")
                         if tool_id:
                             seen_tool_ids[tool_id] = tool_name
+                            tool_start_times[tool_id] = time.time()
                         summary = _format_tool_input(tool_name, block.get("input", {}))
                         _print_line(
                             f"  {_YELLOW}> {tool_name}{summary} ({_elapsed()}){_RESET}"
                         )
-                        run_log["tool_calls"].append({
-                            "tool_id": tool_id,
-                            "name": tool_name,
-                            "input_summary": summary.strip(),
-                            "start_time": time.time(),
-                            "duration_s": None,
-                            "is_error": False,
-                            "error_text": None,
-                        })
+                        num_tool_calls += 1
                     elif block_type == "text":
                         current_state = "text"
                         text_buffer = ""
@@ -641,13 +652,14 @@ def _run_claude_streaming(
                     if current_state == "text" and text_buffer.strip():
                         for tl in text_buffer.strip().splitlines():
                             _print_line(f"  {_CYAN}{tl}{_RESET}")
-                        run_log["text_blocks"].append(text_buffer.strip())
+                        if logger:
+                            logger.log_text_block(text_buffer.strip())
                         text_buffer = ""
                     current_state = "thinking"
 
                 continue
 
-            # --- assistant: full/partial assistant message ---
+            # --- assistant: full/partial assistant message (has complete tool input) ---
             if event_type == "assistant":
                 msg = event.get("message", {})
                 content_blocks = msg.get("content", [])
@@ -659,10 +671,15 @@ def _run_claude_streaming(
                         tool_input = block.get("input", {})
                         if tool_id and tool_id not in seen_tool_ids:
                             seen_tool_ids[tool_id] = tool_name
+                            tool_start_times[tool_id] = time.time()
                             summary = _format_tool_input(tool_name, tool_input)
                             _print_line(
                                 f"  {_YELLOW}> {tool_name}{summary} ({_elapsed()}){_RESET}"
                             )
+                            num_tool_calls += 1
+                        # Log full tool input from the assistant event (complete dict)
+                        if logger and tool_id:
+                            logger.log_tool_call(tool_id, tool_name, tool_input)
                     elif block_type == "text":
                         text = block.get("text", "")
                         if text.strip() and verbose >= 1:
@@ -685,25 +702,20 @@ def _run_claude_streaming(
                             f"  {marker} {tool_name} ({_elapsed()}){_RESET}"
                         )
                         _print_tool_result(block, verbose)
-                        # Update matching tool call in run_log
-                        error_text = None
+
+                        # Log full tool output
+                        tool_output = _extract_tool_output(block)
+                        if logger:
+                            logger.log_tool_result(tool_id, tool_name, tool_output, is_error)
+
                         if is_error:
-                            output = block.get("output", "") or block.get("content", "")
-                            if isinstance(output, list):
-                                parts = []
-                                for b in output:
-                                    if isinstance(b, dict) and b.get("text"):
-                                        parts.append(b["text"])
-                                output = "\n".join(parts)
-                            error_text = str(output).strip().split("\n")[0][:200] if output else ""
-                        for tc in reversed(run_log["tool_calls"]):
-                            if tc["tool_id"] == tool_id:
-                                tc["is_error"] = is_error
-                                tc["error_text"] = error_text
-                                tc["duration_s"] = round(time.time() - tc["start_time"], 1) if tc["start_time"] else None
-                                if is_error:
-                                    run_log["errors"].append(tc)
-                                break
+                            num_errors += 1
+                            error_text = tool_output.strip().split("\n")[0][:200] if tool_output else ""
+                            error_summaries.append({
+                                "name": tool_name,
+                                "input_summary": _format_tool_input(tool_name, {}).strip(),
+                                "error_text": error_text,
+                            })
                 continue
 
             # --- result: final summary at end of run ---
@@ -713,8 +725,8 @@ def _run_claude_streaming(
                 duration = _elapsed()
                 if isinstance(result_data, dict):
                     turns = result_data.get("num_turns", "?")
-                    run_log["num_turns"] = turns
-                    run_log["token_usage"] = result_data.get("usage", {})
+                    result_turns = turns
+                    result_usage = result_data.get("usage", {})
                     _print_line(
                         f"  {_GREEN}✓ Done. Turns: {turns}, Duration: {duration}, Total: {_total_elapsed()}{_RESET}"
                     )
@@ -748,52 +760,33 @@ def _run_claude_streaming(
 
     process.wait()
     exit_code = process.returncode
+    step_duration = round(time.time() - start_time, 1)
 
-    # Finalize structured run log
-    run_log["end_time"] = datetime.datetime.now().isoformat()
-    run_log["duration_s"] = round(time.time() - start_time, 1)
-    run_log["exit_code"] = exit_code
-    run_log["final_output"] = final_output
+    # Log to RunLogger
+    if logger:
+        logger.log_claude_result(
+            turns=result_turns,
+            usage=result_usage,
+            output=final_output,
+            exit_code=exit_code,
+        )
+        logger.log_step_end(step_name or activity, exit_code=exit_code)
 
-    # Write JSONL log (best-effort, don't fail the run)
-    try:
-        log_path = "/workspace/run_log.jsonl"
-        # Strip start_time floats from tool_calls before serializing
-        serializable_calls = []
-        for tc in run_log["tool_calls"]:
-            serializable_calls.append({
-                k: v for k, v in tc.items() if k != "start_time"
-            })
-        log_entry = {**run_log, "tool_calls": serializable_calls}
-        # errors reference the same dicts, rebuild without start_time too
-        log_entry["errors"] = [
-            {k: v for k, v in e.items() if k != "start_time"}
-            for e in run_log["errors"]
-        ]
-        with open(log_path, "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
-    except Exception:
-        pass  # Don't let logging failures break the run
-
-    # Print end-of-run summary
-    num_errors = len(run_log["errors"])
-    num_tool_calls = len(run_log["tool_calls"])
-    duration = run_log["duration_s"]
-    turns = run_log["num_turns"] or "?"
-    usage = run_log["token_usage"]
+    # Print end-of-run summary (kept for human watching the terminal)
+    turns_display = result_turns or "?"
 
     _clear_spinner()
     print()
     print(f"  ── Summary ──────────────────────────")
     print(f"  Tool calls: {num_tool_calls} ({num_errors} errors)")
-    print(f"  Turns: {turns} | Duration: {duration}s")
-    if usage:
-        in_tok = usage.get("input_tokens", 0)
-        out_tok = usage.get("output_tokens", 0)
+    print(f"  Turns: {turns_display} | Duration: {step_duration}s")
+    if result_usage:
+        in_tok = result_usage.get("input_tokens", 0)
+        out_tok = result_usage.get("output_tokens", 0)
         print(f"  Tokens: {in_tok:,} in / {out_tok:,} out")
     if num_errors > 0:
         print(f"  Errors:")
-        for err in run_log["errors"]:
+        for err in error_summaries:
             err_name = err.get("name", "?")
             err_summary = err.get("input_summary", "")
             err_text = err.get("error_text", "")
@@ -817,7 +810,7 @@ def _run_claude_streaming(
     return final_output
 
 
-def run_claude_work(issue: Issue, repo: str, guidelines: str, verbose: int = 0) -> None:
+def run_claude_work(issue: Issue, repo: str, guidelines: str, verbose: int = 0, logger: RunLogger | None = None) -> None:
     """Run Claude to work on the issue with streaming TUI output."""
     prompt = _build_work_prompt(issue, repo, guidelines)
     _run_claude_streaming(
@@ -826,19 +819,32 @@ def run_claude_work(issue: Issue, repo: str, guidelines: str, verbose: int = 0) 
         activity="implementing",
         verbose=verbose,
         max_turns=50,
+        logger=logger,
+        step_name="work",
     )
 
 
-def commit_changes(issue_number: int, default_branch: str) -> bool:
+def commit_changes(issue_number: int, default_branch: str, logger: RunLogger | None = None) -> bool:
     """Stage and commit all changes if Claude forgot to. Returns True if there were changes."""
+    def _run(cmd, **kwargs):
+        r = subprocess.run(cmd, **kwargs)
+        if logger:
+            stdout = ""
+            stderr = ""
+            if kwargs.get("capture_output"):
+                stdout = r.stdout if isinstance(r.stdout, str) else (r.stdout or b"").decode("utf-8", errors="replace")
+                stderr = r.stderr if isinstance(r.stderr, str) else (r.stderr or b"").decode("utf-8", errors="replace")
+            logger.log_subprocess(cmd, r.returncode, stdout, stderr)
+        return r
+
     # Check if there are uncommitted changes
-    status = subprocess.run(
+    status = _run(
         ["git", "status", "--porcelain"],
         capture_output=True, text=True, cwd=REPO_PATH,
     )
     if not status.stdout.strip():
         # Check if there are already commits beyond the base branch
-        log = subprocess.run(
+        log = _run(
             ["git", "log", f"upstream/{default_branch}..HEAD", "--oneline"],
             capture_output=True, text=True, cwd=REPO_PATH,
         )
@@ -848,8 +854,8 @@ def commit_changes(issue_number: int, default_branch: str) -> bool:
         return False
 
     print("  Committing uncommitted changes...")
-    subprocess.run(["git", "add", "-A"], check=True, cwd=REPO_PATH)
-    subprocess.run(
+    _run(["git", "add", "-A"], check=True, cwd=REPO_PATH)
+    _run(
         ["git", "commit", "-m", f"fix: address issue #{issue_number}"],
         check=True, cwd=REPO_PATH,
     )
@@ -873,7 +879,7 @@ def show_changes(default_branch: str) -> None:
     print()
 
 
-def run_claude_review(default_branch: str, verbose: int = 0) -> None:
+def run_claude_review(default_branch: str, verbose: int = 0, logger: RunLogger | None = None) -> None:
     """Run Claude self-review with streaming TUI. Exits with error if review is REJECTED."""
     review_prompt = f"""\
 Review the changes you just made (use `git diff upstream/{default_branch}` to see them against the base branch).
@@ -902,6 +908,8 @@ After your review, output exactly one of:
         activity="reviewing",
         verbose=verbose,
         max_turns=50,
+        logger=logger,
+        step_name="review",
     )
 
     if output.strip() and output.strip().split('\n')[-1].strip().startswith("REJECTED"):
@@ -1018,8 +1026,13 @@ def save_pr_description(
     print("=" * 60)
 
 
-def push_branch(branch: str) -> None:
+def push_branch(branch: str, logger: RunLogger | None = None) -> None:
     """Push the branch to the fork."""
     print(f"[9/9] Pushing branch {branch} to fork...")
+    cmd = ["git", "push", "--force", "origin", branch]
     # --force is intentional: supports retries if the branch was already pushed
-    subprocess.run(["git", "push", "--force", "origin", branch], check=True, cwd=REPO_PATH)
+    result = subprocess.run(cmd, check=True, cwd=REPO_PATH, capture_output=True)
+    if logger:
+        stdout = result.stdout if isinstance(result.stdout, str) else (result.stdout or b"").decode("utf-8", errors="replace")
+        stderr = result.stderr if isinstance(result.stderr, str) else (result.stderr or b"").decode("utf-8", errors="replace")
+        logger.log_subprocess(cmd, result.returncode, stdout, stderr)

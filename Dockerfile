@@ -32,6 +32,7 @@ COPY klaus_kode/ /app/klaus_kode/
 # Create non-root user (Claude CLI refuses --dangerously-skip-permissions as root)
 RUN useradd -m -s /bin/bash claude && \
     mkdir -p /workspace && chown claude:claude /workspace && \
+    mkdir -p /workspace/logs && chown claude:claude /workspace/logs && \
     mkdir -p /home/claude/.claude && chown claude:claude /home/claude/.claude && \
     echo '{"hasCompletedOnboarding": true}' > /home/claude/.claude.json && \
     chown claude:claude /home/claude/.claude.json

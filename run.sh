@@ -39,7 +39,7 @@ if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; the
   exit 1
 fi
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" && chmod 777 "$LOG_DIR"
 LOGFILE="${LOG_DIR}/run_$(date +%Y%m%d_%H%M%S).log"
 echo "==> Logging to ${LOGFILE}"
 
@@ -49,6 +49,7 @@ echo "==> Logging to ${LOGFILE}"
 
   echo "==> Running klaus-kode..."
   docker run --rm \
+    -v "$(pwd)/logs:/workspace/logs" \
     -e GH_TOKEN \
     -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
     -e CLAUDE_CODE_OAUTH_TOKEN="${CLAUDE_CODE_OAUTH_TOKEN:-}" \

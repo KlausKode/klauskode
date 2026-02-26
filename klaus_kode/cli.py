@@ -35,6 +35,7 @@ from klaus_kode.github import (
     search_repos,
     validate_repo,
 )
+from klaus_kode.run_logger import RunLogger
 
 
 def _check_prerequisites(verbose: int = 0) -> None:
@@ -125,171 +126,209 @@ def main(argv: list[str] | None = None) -> None:
     # Set module-level verbosity
     github.verbose = args.verbose
 
-    # 1. Check prerequisites
-    print("Checking prerequisites...")
-    _check_prerequisites(verbose=args.verbose)
+    # Structured logger
+    logger = RunLogger()
+    logger.log_run_start(args=vars(args))
 
-    # 2. Find repo if --find-repo was used
-    candidates_repos: list | None = None
-    if args.find_repo:
-        print(f"\nSearching GitHub for repos matching: '{args.find_repo}'...")
-        candidates_repos = search_repos(args.find_repo)
-        if not candidates_repos:
-            print("Error: No repositories found.", file=sys.stderr)
-            raise SystemExit(1)
-        print(f"  Found {len(candidates_repos)} candidate repos:")
-        for i, r in enumerate(candidates_repos, 1):
-            print(f"    {i}. {r.full_name} ({r.language}, {r.stars}\u2605) \u2014 {r.description[:80]}")
-        chosen = pick_repo(candidates_repos, args.find_repo)
-        args.repo = chosen.full_name
-        print(f"  Selected repo: {args.repo}")
+    exit_code = 0
+    pr_url = ""
+    try:
+        # 1. Check prerequisites
+        print("Checking prerequisites...")
+        _check_prerequisites(verbose=args.verbose)
 
-    # 3. Validate repo
-    print(f"\nValidating repo {args.repo}...")
-    if not validate_repo(args.repo):
-        print(f"Error: Repository '{args.repo}' not found.", file=sys.stderr)
-        raise SystemExit(1)
-
-    # 4. Fetch or find issue
-    if args.issue is not None:
-        # Explicit issue number
-        print(f"Fetching issue #{args.issue}...")
-        issue = fetch_issue(args.repo, args.issue)
-        if issue is None:
-            raise SystemExit(1)
-        if issue.state != "open":
-            print(
-                f"Error: Issue #{args.issue} is not open (state: {issue.state}).",
-                file=sys.stderr,
+        # 2. Find repo if --find-repo was used
+        candidates_repos: list | None = None
+        if args.find_repo:
+            print(f"\nSearching GitHub for repos matching: '{args.find_repo}'...")
+            candidates_repos = search_repos(args.find_repo)
+            if not candidates_repos:
+                print("Error: No repositories found.", file=sys.stderr)
+                raise SystemExit(1)
+            print(f"  Found {len(candidates_repos)} candidate repos:")
+            for i, r in enumerate(candidates_repos, 1):
+                print(f"    {i}. {r.full_name} ({r.language}, {r.stars}\u2605) \u2014 {r.description[:80]}")
+            chosen = pick_repo(candidates_repos, args.find_repo, logger=logger)
+            args.repo = chosen.full_name
+            print(f"  Selected repo: {args.repo}")
+            logger.log_decision(
+                decision="repo_selected",
+                reason=f"Claude picked {args.repo} from {len(candidates_repos)} candidates",
+                repo=args.repo,
             )
-            raise SystemExit(1)
-        print(f"  Issue #{issue.number}: {issue.title}")
-        if args.verbose and issue.labels:
-            print(f"  Labels: {', '.join(issue.labels)}")
 
-        # Check if issue is already being worked on
-        print(f"Checking if issue #{args.issue} is already being worked on...")
-        is_active, reason = check_issue_active_work(args.repo, issue)
-        if is_active:
-            print(f"Skipping issue #{args.issue}: {reason}", file=sys.stderr)
-            raise SystemExit(1)
-        print("  No active work found, proceeding.")
-    else:
-        # Use --find description or default to easy beginner-friendly issues
-        find_description = args.find or "easy beginner-friendly good first issue"
-        print(f"Searching open issues in {args.repo} matching: '{find_description}'...")
-        candidates = search_issues(args.repo)
+        logger.set_context(repo=args.repo)
 
-        # If no issues found and we came from --find-repo, try remaining candidates
-        if not candidates and candidates_repos:
-            tried = {args.repo}
-            for fallback_repo in candidates_repos:
-                if fallback_repo.full_name in tried:
+        # 3. Validate repo
+        print(f"\nValidating repo {args.repo}...")
+        if not validate_repo(args.repo):
+            print(f"Error: Repository '{args.repo}' not found.", file=sys.stderr)
+            raise SystemExit(1)
+
+        # 4. Fetch or find issue
+        if args.issue is not None:
+            # Explicit issue number
+            print(f"Fetching issue #{args.issue}...")
+            issue = fetch_issue(args.repo, args.issue)
+            if issue is None:
+                raise SystemExit(1)
+            if issue.state != "open":
+                print(
+                    f"Error: Issue #{args.issue} is not open (state: {issue.state}).",
+                    file=sys.stderr,
+                )
+                raise SystemExit(1)
+            print(f"  Issue #{issue.number}: {issue.title}")
+            if args.verbose and issue.labels:
+                print(f"  Labels: {', '.join(issue.labels)}")
+
+            # Check if issue is already being worked on
+            print(f"Checking if issue #{args.issue} is already being worked on...")
+            is_active, reason = check_issue_active_work(args.repo, issue)
+            if is_active:
+                print(f"Skipping issue #{args.issue}: {reason}", file=sys.stderr)
+                raise SystemExit(1)
+            print("  No active work found, proceeding.")
+        else:
+            # Use --find description or default to easy beginner-friendly issues
+            find_description = args.find or "easy beginner-friendly good first issue"
+            print(f"Searching open issues in {args.repo} matching: '{find_description}'...")
+            candidates = search_issues(args.repo)
+
+            # If no issues found and we came from --find-repo, try remaining candidates
+            if not candidates and candidates_repos:
+                tried = {args.repo}
+                for fallback_repo in candidates_repos:
+                    if fallback_repo.full_name in tried:
+                        continue
+                    tried.add(fallback_repo.full_name)
+                    print(f"  No open issues in {args.repo}, trying {fallback_repo.full_name}...")
+                    if not validate_repo(fallback_repo.full_name):
+                        continue
+                    candidates = search_issues(fallback_repo.full_name)
+                    if candidates:
+                        args.repo = fallback_repo.full_name
+                        logger.set_context(repo=args.repo)
+                        print(f"  Switched to repo: {args.repo}")
+                        break
+
+            if not candidates:
+                print("Error: No open issues found.", file=sys.stderr)
+                raise SystemExit(1)
+            print(f"  Found {len(candidates)} open issues, filtering...")
+
+            # Labels that indicate non-coding issues
+            non_coding_labels = {
+                "question", "discussion", "support",
+                "wontfix", "won't fix", "duplicate", "invalid",
+                "needs info", "needs-info", "needs more info",
+                "waiting for response", "waiting-for-response",
+            }
+
+            # Filter out non-coding issues and issues already being worked on
+            available: list[github.Issue] = []
+            for candidate in candidates:
+                # Skip issues with non-coding labels
+                candidate_labels = {label.lower() for label in candidate.labels}
+                skipped_labels = candidate_labels & non_coding_labels
+                if skipped_labels:
+                    if args.verbose:
+                        print(f"  Skipping #{candidate.number}: non-coding label(s): {', '.join(skipped_labels)}")
                     continue
-                tried.add(fallback_repo.full_name)
-                print(f"  No open issues in {args.repo}, trying {fallback_repo.full_name}...")
-                if not validate_repo(fallback_repo.full_name):
-                    continue
-                candidates = search_issues(fallback_repo.full_name)
-                if candidates:
-                    args.repo = fallback_repo.full_name
-                    print(f"  Switched to repo: {args.repo}")
-                    break
 
-        if not candidates:
-            print("Error: No open issues found.", file=sys.stderr)
+                is_active, reason = check_issue_active_work(args.repo, candidate)
+                if not is_active:
+                    available.append(candidate)
+                elif args.verbose:
+                    print(f"  Skipping #{candidate.number}: {reason}")
+
+            if not available:
+                print("Error: All candidate issues are already being worked on.", file=sys.stderr)
+                raise SystemExit(1)
+            print(f"  {len(available)} issues available (not claimed)")
+
+            issue = pick_issue(available, find_description, logger=logger)
+            print(f"  Selected issue #{issue.number}: {issue.title}")
+            if issue.labels:
+                print(f"  Labels: {', '.join(issue.labels)}")
+            logger.log_decision(
+                decision="issue_selected",
+                reason=f"Claude picked issue #{issue.number} from {len(available)} candidates",
+                issue_number=issue.number,
+                issue_title=issue.title,
+            )
+
+        logger.set_context(
+            issue={"number": issue.number, "title": issue.title, "body": issue.body},
+        )
+
+        # 4. Fork repo
+        print(f"\nForking {args.repo}...")
+        fork = fork_repo(args.repo)
+        print(f"  Fork: {fork}")
+        logger.set_context(fork=fork)
+
+        # 5. Clone repo
+        print("\nSetting up repository...")
+        default_branch = clone_repo(args.repo, fork, logger=logger)
+
+        # 6. Read contributing guidelines
+        guidelines = read_contributing_guidelines()
+
+        # 7. Suggest branch name based on guidelines
+        branch_name = suggest_branch_name(issue, guidelines)
+        print(f"  Branch name: {branch_name}")
+        logger.set_context(branch=branch_name, default_branch=default_branch)
+
+        # 8. Create branch
+        create_branch(branch_name, default_branch)
+
+        # 9. Check guidelines compliance
+        if not check_guidelines_compliance(guidelines):
             raise SystemExit(1)
-        print(f"  Found {len(candidates)} open issues, filtering...")
 
-        # Labels that indicate non-coding issues
-        non_coding_labels = {
-            "question", "discussion", "support",
-            "wontfix", "won't fix", "duplicate", "invalid",
-            "needs info", "needs-info", "needs more info",
-            "waiting for response", "waiting-for-response",
-        }
+        # 10. Run Claude to work on the issue
+        run_claude_work(issue, args.repo, guidelines, verbose=args.verbose, logger=logger)
 
-        # Filter out non-coding issues and issues already being worked on
-        available: list[github.Issue] = []
-        for candidate in candidates:
-            # Skip issues with non-coding labels
-            candidate_labels = {label.lower() for label in candidate.labels}
-            skipped_labels = candidate_labels & non_coding_labels
-            if skipped_labels:
-                if args.verbose:
-                    print(f"  Skipping #{candidate.number}: non-coding label(s): {', '.join(skipped_labels)}")
-                continue
-
-            is_active, reason = check_issue_active_work(args.repo, candidate)
-            if not is_active:
-                available.append(candidate)
-            elif args.verbose:
-                print(f"  Skipping #{candidate.number}: {reason}")
-
-        if not available:
-            print("Error: All candidate issues are already being worked on.", file=sys.stderr)
+        # 10.5 Ensure changes are committed
+        if not commit_changes(issue.number, default_branch, logger=logger):
+            print("No changes were made. Nothing to push.", file=sys.stderr)
             raise SystemExit(1)
-        print(f"  {len(available)} issues available (not claimed)")
 
-        issue = pick_issue(available, find_description)
-        print(f"  Selected issue #{issue.number}: {issue.title}")
-        if issue.labels:
-            print(f"  Labels: {', '.join(issue.labels)}")
+        # 11. Show changes + self-review (step 8/9)
+        show_changes(default_branch)
+        run_claude_review(default_branch, verbose=args.verbose, logger=logger)
 
-    # 4. Fork repo
-    print(f"\nForking {args.repo}...")
-    fork = fork_repo(args.repo)
-    print(f"  Fork: {fork}")
+        # 12. Generate PR description
+        title, body = generate_pr_description(issue, args.repo, default_branch)
 
-    # 5. Clone repo
-    print("\nSetting up repository...")
-    default_branch = clone_repo(args.repo, fork)
+        # 13. Push branch
+        push_branch(branch_name, logger=logger)
 
-    # 6. Read contributing guidelines
-    guidelines = read_contributing_guidelines()
+        # 14. Save PR description and print ready-to-run command
+        save_pr_description(
+            title=title,
+            body=body,
+            repo=args.repo,
+            fork=fork,
+            branch=branch_name,
+            default_branch=default_branch,
+        )
 
-    # 7. Suggest branch name based on guidelines
-    branch_name = suggest_branch_name(issue, guidelines)
-    print(f"  Branch name: {branch_name}")
+        elapsed = time.time() - t0
+        minutes, seconds = divmod(int(elapsed), 60)
+        print(f"\nTotal runtime: {minutes}m {seconds}s")
 
-    # 8. Create branch
-    create_branch(branch_name, default_branch)
-
-    # 9. Check guidelines compliance
-    if not check_guidelines_compliance(guidelines):
-        raise SystemExit(1)
-
-    # 10. Run Claude to work on the issue
-    run_claude_work(issue, args.repo, guidelines, verbose=args.verbose)
-
-    # 10.5 Ensure changes are committed
-    if not commit_changes(issue.number, default_branch):
-        print("No changes were made. Nothing to push.", file=sys.stderr)
-        raise SystemExit(1)
-
-    # 11. Show changes + self-review (step 8/9)
-    show_changes(default_branch)
-    run_claude_review(default_branch, verbose=args.verbose)
-
-    # 12. Generate PR description
-    title, body = generate_pr_description(issue, args.repo, default_branch)
-
-    # 13. Push branch
-    push_branch(branch_name)
-
-    # 14. Save PR description and print ready-to-run command
-    save_pr_description(
-        title=title,
-        body=body,
-        repo=args.repo,
-        fork=fork,
-        branch=branch_name,
-        default_branch=default_branch,
-    )
-
-    elapsed = time.time() - t0
-    minutes, seconds = divmod(int(elapsed), 60)
-    print(f"\nTotal runtime: {minutes}m {seconds}s")
+    except SystemExit as e:
+        exit_code = e.code if isinstance(e.code, int) else 1
+        raise
+    except Exception as e:
+        exit_code = 1
+        logger.log_error(e)
+        raise
+    finally:
+        logger.log_run_end(exit_code=exit_code, pr_url=pr_url)
+        logger.flush_final_summary()
 
 
 if __name__ == "__main__":
