@@ -29,7 +29,7 @@ At the end, you get a URL. Click it, review the changes on GitHub, and hit "Crea
 
 - **Docker**
 - **GitHub Personal Access Token** (`GH_TOKEN`) — see [setup instructions](#github-token-setup) below
-- **Claude credentials** — either `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN`
+- **Claude credentials** — either `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` — see [setup instructions](#claude-credentials-setup) below
 
 ## Quick start
 
@@ -88,6 +88,26 @@ That's it. It does **not**:
 - The token is passed into the Docker container via environment variable and never written to disk or logged.
 - The container is ephemeral (`--rm`) — it is destroyed after each run.
 - All git operations use `gh auth setup-git` for credential handling — the token is never embedded in clone URLs.
+
+## Claude credentials setup
+
+You need **one** of the following:
+
+### Option A: API key (`ANTHROPIC_API_KEY`)
+
+1. Go to https://console.anthropic.com/settings/keys
+2. Click **Create Key**
+3. Copy the key and set it as `ANTHROPIC_API_KEY`
+
+This requires an Anthropic account with API credits.
+
+### Option B: OAuth token (`CLAUDE_CODE_OAUTH_TOKEN`)
+
+1. Install the Claude CLI (`npm install -g @anthropic-ai/claude-code`)
+2. Run `claude login` and complete the browser-based login
+3. Copy the token from `~/.claude/credentials.json` and set it as `CLAUDE_CODE_OAUTH_TOKEN`
+
+This uses your Claude Pro/Team subscription instead of API credits.
 
 ## What can go wrong
 

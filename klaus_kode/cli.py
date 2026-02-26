@@ -63,6 +63,7 @@ def _check_prerequisites(verbose: int = 0) -> None:
     if not has_oauth and not has_api_key:
         print("Error: No Claude authentication found.", file=sys.stderr)
         print("Set one of: CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY.", file=sys.stderr)
+        print("Create an API key at: https://console.anthropic.com/settings/keys", file=sys.stderr)
         raise SystemExit(1)
     auth_method = "OAuth token" if has_oauth else "API key"
     print(f"  Claude: OK ({auth_method})")
