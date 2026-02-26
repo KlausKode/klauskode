@@ -78,7 +78,7 @@ set -a && source .env && set +a
 
 The `--find` flag accepts any free-text description — a difficulty level (`"easy"`, `"medium"`, `"hard"`), a topic (`"simple documentation fix"`), or a specific technical detail (`"epsilon comparison in RANSAC"`). Klaus fetches recent open issues, filters out ones already being worked on, and uses Claude to pick the best match.
 
-The `--find-repo` flag searches GitHub for repositories matching the description, filtering for repos with good-first-issues and >10 stars. Claude picks the best match. Cannot be combined with `--issue` (since issue numbers are repo-specific).
+The `--find-repo` flag searches GitHub for repositories matching the description, filtering for repos with >10 stars. Claude picks the best match. Cannot be combined with `--issue` (since issue numbers are repo-specific).
 
 Output is printed to the terminal and saved to `logs/run_<timestamp>.log`.
 

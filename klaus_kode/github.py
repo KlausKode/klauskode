@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -225,10 +226,17 @@ def search_issues(repo: str, limit: int = 30) -> list[Issue]:
 def search_repos(description: str, limit: int = 10) -> list[Repository]:
     """Search GitHub for repositories matching a description.
 
-    Filters for repos with good-first-issues and >10 stars.
+    Strips meta-words (repo, project, etc.) that users add but aren't
+    meaningful search terms. Filters for repos with >10 stars.
     Returns a list of Repository objects sorted by stars.
     """
-    query = quote(f"{description} good-first-issues:>0 stars:>10")
+    # Strip words that describe "a repo" rather than what the repo is about
+    noise_words = {"repo", "repos", "repository", "repositories", "project", "projects", "library", "libraries"}
+    words = re.split(r'[\s/]+', description)
+    cleaned = " ".join(w for w in words if w.lower() not in noise_words)
+    if not cleaned.strip():
+        cleaned = description  # fallback to original if everything was stripped
+    query = quote(f"{cleaned} stars:>10", safe="")
     result = _run_gh(
         "api",
         f"search/repositories?q={query}&sort=stars&order=desc&per_page={limit}",

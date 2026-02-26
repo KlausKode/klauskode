@@ -5,6 +5,7 @@ All functions use subprocess directly — no bash script generation.
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import random
@@ -322,6 +323,12 @@ You are working on issue #{issue.number} in the repository {repo}.
 **Issue body:**
 {issue.body}
 
+**Environment:**
+- Working directory: /workspace/repo (the cloned repository)
+- Python: use `python3` (not `python`). There is no `python` alias.
+- Installing packages: use `python3 -m pip install --break-system-packages <pkg>` or create a venv first.
+- Start by running `ls` to understand the project structure before making changes.
+
 Instructions:
 1. Read and understand the issue thoroughly.
 2. Check the CONTRIBUTING.md or similar docs to understand the project's contribution guidelines.
@@ -499,6 +506,22 @@ def _run_claude_streaming(
     seen_tool_ids = {}  # tool_id -> tool_name, track which we already printed a header for
     final_output = ""  # capture final text for return value
 
+    # Structured run log for post-run analysis
+    run_log = {
+        "prompt": prompt,
+        "activity": activity,
+        "start_time": datetime.datetime.now().isoformat(),
+        "end_time": None,
+        "duration_s": 0,
+        "num_turns": None,
+        "token_usage": {},
+        "tool_calls": [],
+        "errors": [],
+        "text_blocks": [],
+        "final_output": "",
+        "exit_code": None,
+    }
+
     def _elapsed() -> str:
         return f"{int(time.time() - start_time)}s"
 
@@ -589,6 +612,15 @@ def _run_claude_streaming(
                         _print_line(
                             f"  {_YELLOW}> {tool_name}{summary} ({_elapsed()}){_RESET}"
                         )
+                        run_log["tool_calls"].append({
+                            "tool_id": tool_id,
+                            "name": tool_name,
+                            "input_summary": summary.strip(),
+                            "start_time": time.time(),
+                            "duration_s": None,
+                            "is_error": False,
+                            "error_text": None,
+                        })
                     elif block_type == "text":
                         current_state = "text"
                         text_buffer = ""
@@ -609,6 +641,7 @@ def _run_claude_streaming(
                     if current_state == "text" and text_buffer.strip():
                         for tl in text_buffer.strip().splitlines():
                             _print_line(f"  {_CYAN}{tl}{_RESET}")
+                        run_log["text_blocks"].append(text_buffer.strip())
                         text_buffer = ""
                     current_state = "thinking"
 
@@ -652,6 +685,25 @@ def _run_claude_streaming(
                             f"  {marker} {tool_name} ({_elapsed()}){_RESET}"
                         )
                         _print_tool_result(block, verbose)
+                        # Update matching tool call in run_log
+                        error_text = None
+                        if is_error:
+                            output = block.get("output", "") or block.get("content", "")
+                            if isinstance(output, list):
+                                parts = []
+                                for b in output:
+                                    if isinstance(b, dict) and b.get("text"):
+                                        parts.append(b["text"])
+                                output = "\n".join(parts)
+                            error_text = str(output).strip().split("\n")[0][:200] if output else ""
+                        for tc in reversed(run_log["tool_calls"]):
+                            if tc["tool_id"] == tool_id:
+                                tc["is_error"] = is_error
+                                tc["error_text"] = error_text
+                                tc["duration_s"] = round(time.time() - tc["start_time"], 1) if tc["start_time"] else None
+                                if is_error:
+                                    run_log["errors"].append(tc)
+                                break
                 continue
 
             # --- result: final summary at end of run ---
@@ -661,6 +713,8 @@ def _run_claude_streaming(
                 duration = _elapsed()
                 if isinstance(result_data, dict):
                     turns = result_data.get("num_turns", "?")
+                    run_log["num_turns"] = turns
+                    run_log["token_usage"] = result_data.get("usage", {})
                     _print_line(
                         f"  {_GREEN}✓ Done. Turns: {turns}, Duration: {duration}, Total: {_total_elapsed()}{_RESET}"
                     )
@@ -695,6 +749,58 @@ def _run_claude_streaming(
     process.wait()
     exit_code = process.returncode
 
+    # Finalize structured run log
+    run_log["end_time"] = datetime.datetime.now().isoformat()
+    run_log["duration_s"] = round(time.time() - start_time, 1)
+    run_log["exit_code"] = exit_code
+    run_log["final_output"] = final_output
+
+    # Write JSONL log (best-effort, don't fail the run)
+    try:
+        log_path = "/workspace/run_log.jsonl"
+        # Strip start_time floats from tool_calls before serializing
+        serializable_calls = []
+        for tc in run_log["tool_calls"]:
+            serializable_calls.append({
+                k: v for k, v in tc.items() if k != "start_time"
+            })
+        log_entry = {**run_log, "tool_calls": serializable_calls}
+        # errors reference the same dicts, rebuild without start_time too
+        log_entry["errors"] = [
+            {k: v for k, v in e.items() if k != "start_time"}
+            for e in run_log["errors"]
+        ]
+        with open(log_path, "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+    except Exception:
+        pass  # Don't let logging failures break the run
+
+    # Print end-of-run summary
+    num_errors = len(run_log["errors"])
+    num_tool_calls = len(run_log["tool_calls"])
+    duration = run_log["duration_s"]
+    turns = run_log["num_turns"] or "?"
+    usage = run_log["token_usage"]
+
+    _clear_spinner()
+    print()
+    print(f"  ── Summary ──────────────────────────")
+    print(f"  Tool calls: {num_tool_calls} ({num_errors} errors)")
+    print(f"  Turns: {turns} | Duration: {duration}s")
+    if usage:
+        in_tok = usage.get("input_tokens", 0)
+        out_tok = usage.get("output_tokens", 0)
+        print(f"  Tokens: {in_tok:,} in / {out_tok:,} out")
+    if num_errors > 0:
+        print(f"  Errors:")
+        for err in run_log["errors"]:
+            err_name = err.get("name", "?")
+            err_summary = err.get("input_summary", "")
+            err_text = err.get("error_text", "")
+            print(f"    ✗ {err_name} {err_summary} ({err_text})")
+    print(f"  ────────────────────────────────────")
+    print()
+
     # Capture stderr for diagnostics
     stderr_output = ""
     try:
@@ -702,7 +808,6 @@ def _run_claude_streaming(
     except Exception:
         pass
 
-    print()
     print(f"  [claude exit code: {exit_code}]")
     if stderr_output and (exit_code != 0 or verbose >= 2):
         print(f"  [stderr] {stderr_output[:500]}")
@@ -773,6 +878,11 @@ def run_claude_review(default_branch: str, verbose: int = 0) -> None:
     review_prompt = f"""\
 Review the changes you just made (use `git diff upstream/{default_branch}` to see them against the base branch).
 
+**Environment:**
+- Working directory: /workspace/repo (the cloned repository)
+- Python: use `python3` (not `python`). There is no `python` alias.
+- Installing packages: use `python3 -m pip install --break-system-packages <pkg>` or create a venv first.
+
 Check for:
 - Correctness: Does the implementation actually address the issue?
 - Test coverage: Are there tests for the new behavior? If the project has tests, did you add/update them?
@@ -812,7 +922,11 @@ def generate_pr_description(issue: Issue, repo: str, default_branch: str) -> tup
         f"Write a GitHub PR title and body for the changes you just made "
         f"(run `git diff upstream/{default_branch}` to see them). "
         f"The PR addresses issue #{issue.number}: {issue.title}. "
-        f"Output format: first line = title, blank line, then body in markdown."
+        f"Output format: first line = title, blank line, then body in markdown.\n\n"
+        f"**Environment:**\n"
+        f"- Working directory: /workspace/repo (the cloned repository)\n"
+        f"- Python: use `python3` (not `python`). There is no `python` alias.\n"
+        f"- Installing packages: use `python3 -m pip install --break-system-packages <pkg>` or create a venv first."
     )
 
     result = subprocess.run(
