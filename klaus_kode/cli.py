@@ -130,6 +130,7 @@ def main(argv: list[str] | None = None) -> None:
     _check_prerequisites(verbose=args.verbose)
 
     # 2. Find repo if --find-repo was used
+    candidates_repos: list | None = None
     if args.find_repo:
         print(f"\nSearching GitHub for repos matching: '{args.find_repo}'...")
         candidates_repos = search_repos(args.find_repo)
@@ -178,6 +179,23 @@ def main(argv: list[str] | None = None) -> None:
         find_description = args.find or "easy beginner-friendly good first issue"
         print(f"Searching open issues in {args.repo} matching: '{find_description}'...")
         candidates = search_issues(args.repo)
+
+        # If no issues found and we came from --find-repo, try remaining candidates
+        if not candidates and candidates_repos:
+            tried = {args.repo}
+            for fallback_repo in candidates_repos:
+                if fallback_repo.full_name in tried:
+                    continue
+                tried.add(fallback_repo.full_name)
+                print(f"  No open issues in {args.repo}, trying {fallback_repo.full_name}...")
+                if not validate_repo(fallback_repo.full_name):
+                    continue
+                candidates = search_issues(fallback_repo.full_name)
+                if candidates:
+                    args.repo = fallback_repo.full_name
+                    print(f"  Switched to repo: {args.repo}")
+                    break
+
         if not candidates:
             print("Error: No open issues found.", file=sys.stderr)
             raise SystemExit(1)
