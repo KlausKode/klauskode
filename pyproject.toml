@@ -6,6 +6,9 @@ requires-python = ">=3.10"
 dependencies = ["claude-agent-sdk"]
 # Other runtime deps (git, gh) are provided by Docker
 
+[project.optional-dependencies]
+test = ["pytest>=7.4", "pytest-asyncio>=0.21"]
+
 [project.scripts]
 klaus-kode = "klaus_kode.cli:main"
 

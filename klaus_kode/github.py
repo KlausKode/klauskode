@@ -14,7 +14,8 @@ import time
 from dataclasses import dataclass
 from urllib.parse import quote
 
-# Module-level verbosity level — set by CLI at startup (0=quiet, 1=verbose, 2+=debug).
+# Module-level verbosity level — kept for backwards compat but prefer passing
+# verbose as a parameter to _run_gh() directly.
 verbose = 0
 
 
@@ -37,16 +38,23 @@ class Repository:
     topics: list[str]
 
 
-def _run_gh(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    """Run a `gh` CLI command."""
+def _run_gh(*args: str, check: bool = True, verbose: int | None = None) -> subprocess.CompletedProcess[str]:
+    """Run a `gh` CLI command.
+
+    Args:
+        verbose: Verbosity level. If None, falls back to module-level ``verbose``.
+    """
     cmd = ["gh", *args]
 
-    if verbose:
+    # Resolve verbosity: explicit parameter wins, else module-level fallback
+    _verbose = verbose if verbose is not None else globals()["verbose"]
+
+    if _verbose:
         print(f"  [gh] running: gh {' '.join(args)}")
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
-    if verbose:
+    if _verbose:
         if result.stdout.strip():
             print(f"  [gh] stdout: {result.stdout.strip()[:500]}")
         if result.stderr.strip():
