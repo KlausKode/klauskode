@@ -4,16 +4,21 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 import time
 
 from klaus_kode import claude_runner
 from klaus_kode.claude_runner import (
+    REPO_PATH,
+    _cleanup_inner_claude_md,
     check_guidelines_compliance,
     clone_repo,
     commit_changes,
     create_branch,
+    gather_repo_context,
     generate_pr_description,
+    parallel_pre_work,
     pick_issue,
     pick_repo,
     push_branch,
@@ -23,6 +28,7 @@ from klaus_kode.claude_runner import (
     save_pr_description,
     show_changes,
     suggest_branch_name,
+    write_inner_claude_md,
 )
 from klaus_kode import github
 from klaus_kode.github import (
@@ -101,6 +107,12 @@ def main(argv: list[str] | None = None) -> None:
         "--find",
         type=str,
         help="Search open issues and pick one matching this description (e.g. 'easy', 'documentation fix')",
+    )
+    parser.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        help="Maximum USD budget for Claude API usage (only applies with ANTHROPIC_API_KEY)",
     )
     parser.add_argument(
         "-v", "--verbose",
@@ -275,32 +287,58 @@ def main(argv: list[str] | None = None) -> None:
         # 6. Read contributing guidelines
         guidelines = read_contributing_guidelines()
 
-        # 7. Suggest branch name based on guidelines
-        branch_name = suggest_branch_name(issue, guidelines)
+        # 7+9. Suggest branch name + check guidelines compliance (parallel)
+        print("\n[6/9] Checking guidelines and suggesting branch name...")
+        branch_name, should_proceed = parallel_pre_work(issue, guidelines)
         print(f"  Branch name: {branch_name}")
+        if not should_proceed:
+            raise SystemExit(1)
         logger.set_context(branch=branch_name, default_branch=default_branch)
 
         # 8. Create branch
         create_branch(branch_name, default_branch)
 
-        # 9. Check guidelines compliance
-        if not check_guidelines_compliance(guidelines):
-            raise SystemExit(1)
+        # 9.5 Write inner CLAUDE.md for the target repo
+        write_inner_claude_md(issue, args.repo, guidelines, branch_name)
+
+        # Pre-fetch repo context to reduce Claude's exploration overhead
+        print("  Pre-fetching repository context...")
+        repo_context = gather_repo_context()
 
         # 10. Run Claude to work on the issue
-        run_claude_work(issue, args.repo, guidelines, verbose=args.verbose, logger=logger)
+        run_claude_work(
+            issue, args.repo, guidelines,
+            verbose=args.verbose, logger=logger,
+            max_budget_usd=args.budget,
+            repo_context=repo_context,
+        )
 
-        # 10.5 Ensure changes are committed
+        # 10.5 Clean up inner CLAUDE.md and ensure changes are committed
+        _cleanup_inner_claude_md()
         if not commit_changes(issue.number, default_branch, logger=logger):
             print("No changes were made. Nothing to push.", file=sys.stderr)
             raise SystemExit(1)
 
-        # 11. Show changes + self-review (step 8/9)
-        show_changes(default_branch)
-        run_claude_review(default_branch, verbose=args.verbose, logger=logger)
+        # 11. Capture diff once for reuse in review + PR description
+        diff_result = subprocess.run(
+            ["git", "--no-pager", "diff", f"upstream/{default_branch}"],
+            capture_output=True, text=True, cwd=REPO_PATH,
+        )
+        diff_output = diff_result.stdout[:50000]  # Cap at 50KB
 
-        # 12. Generate PR description
-        title, body = generate_pr_description(issue, args.repo, default_branch)
+        # Show changes to human + self-review with diff injected
+        show_changes(default_branch)
+        run_claude_review(
+            default_branch,
+            verbose=args.verbose, logger=logger,
+            max_budget_usd=args.budget,
+            diff_output=diff_output,
+        )
+
+        # 12. Generate PR description (reuse captured diff)
+        title, body = generate_pr_description(
+            issue, args.repo, default_branch, diff_output=diff_output,
+        )
 
         # 13. Push branch
         push_branch(branch_name, logger=logger)

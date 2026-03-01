@@ -168,15 +168,18 @@ class RunLogger:
     # ------------------------------------------------------------------
 
     def flush_final_summary(self) -> None:
-        """Print all entries between markers (fallback if volume mount missing) and close."""
-        print(f"\n{_JSONL_START_MARKER}")
-        for line in self._entries:
-            print(line)
-        print(f"{_JSONL_END_MARKER}\n")
-
+        """Print all entries between markers only if the log file could not be written."""
         if self._file is not None:
+            # Log file was written successfully — just close it
             try:
                 self._file.close()
             except OSError:
                 pass
             self._file = None
+            print(f"\n  Log saved to: {self._log_path}")
+        else:
+            # Volume mount missing — dump to stdout as fallback
+            print(f"\n{_JSONL_START_MARKER}")
+            for line in self._entries:
+                print(line)
+            print(f"{_JSONL_END_MARKER}\n")
